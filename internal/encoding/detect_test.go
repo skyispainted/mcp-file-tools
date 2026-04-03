@@ -402,3 +402,171 @@ func TestDetectFromFile_SampleMode_LowConfidenceForceFullSampling(t *testing.T) 
 	}
 }
 
+// --- GBK/Chinese encoding tests ---
+
+func TestDetectFromFile_GBK(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "chinese.txt")
+
+	// GBK bytes for common Chinese characters - need enough content for reliable detection
+	// Use characters in the 0xB0-0xD7 range (most common Chinese characters)
+	// "的" = 0xB5C4, "是" = 0xCAC7, "在" = 0xD4DA, "有" = 0xD3D0, "和" = 0xBACD
+	content := []byte{}
+	gbkChars := [][]byte{
+		{0xB5, 0xC4}, // 的
+		{0xCA, 0xC7}, // 是
+		{0xD4, 0xDA}, // 在
+		{0xD3, 0xD0}, // 有
+		{0xBA, 0xCD}, // 和
+		{0xC4, 0xE0}, // 你
+		{0xBA, 0xC3}, // 好
+	}
+	// Repeat to have enough content (>10 GBK sequences)
+	for i := 0; i < 15; i++ {
+		for _, char := range gbkChars {
+			content = append(content, char...)
+		}
+	}
+
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := DetectFromFile(path, "sample")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should detect GBK
+	if result.Charset != "gbk" {
+		t.Errorf("Charset = %q, want gbk", result.Charset)
+	}
+}
+
+func TestDetectFromFile_GBK_LongContent(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "chinese_long.txt")
+
+	// Longer GBK content with common Chinese characters to improve detection confidence
+	// Mix of ASCII and GBK encoded Chinese characters
+	// "中文内容测试" repeated - these are common characters in the 0xB0-0xD7 range
+	content := []byte{}
+	// Add some ASCII prefix
+	content = append(content, []byte("Test file: ")...)
+	// Add GBK encoded Chinese characters (common range)
+	// "的" = 0xB5C4, "是" = 0xCAC7, "在" = 0xD4DA, "有" = 0xD3D0, "和" = 0xBACD
+	// These are high-frequency characters
+	gbkChars := [][]byte{
+		{0xB5, 0xC4}, // 的
+		{0xCA, 0xC7}, // 是
+		{0xD4, 0xDA}, // 在
+		{0xD3, 0xD0}, // 有
+		{0xBA, 0xCD}, // 和
+		{0xC4, 0xE0}, // 你
+		{0xBA, 0xC3}, // 好
+		{0xCA, 0xC0}, // 世
+		{0xBD, 0xE7}, // 界
+	}
+	for i := 0; i < 50; i++ {
+		for _, char := range gbkChars {
+			content = append(content, char...)
+		}
+		content = append(content, ' ')
+	}
+
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := DetectFromFile(path, "sample")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Should detect GBK
+	if result.Charset != "gbk" {
+		t.Errorf("Charset = %q, want gbk", result.Charset)
+	}
+}
+
+func TestHasGBKSequence(t *testing.T) {
+	tests := []struct {
+		name          string
+		data          []byte
+		wantCount     int
+		wantMinRatio  float64
+	}{
+		{"Empty", []byte{}, 0, 0},
+		{"Single byte", []byte{0xC4}, 0, 0},
+		{"Valid GBK pair", []byte{0xC4, 0xE0}, 1, 0}, // 你
+		{"Multiple GBK pairs", []byte{0xC4, 0xE0, 0xBA, 0xC3, 0xCA, 0xC0}, 3, 0}, // non-overlapping: 你好世
+		{"Common Chinese chars", []byte{0xB5, 0xC4, 0xCA, 0xC7, 0xD4, 0xDA}, 3, 0.99}, // 的是在 - all in common range
+		{"Mixed ASCII and GBK", []byte{'A', 0xC4, 0xE0, 'B', 0xBA, 0xC3}, 2, 0}, // 你好
+		{"Invalid second byte (0x7F)", []byte{0xC4, 0x7F}, 0, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			count, ratio := HasGBKSequence(tt.data)
+			if count != tt.wantCount {
+				t.Errorf("HasGBKSequence count = %d, want %d", count, tt.wantCount)
+			}
+			if tt.wantMinRatio > 0 && ratio < tt.wantMinRatio {
+				t.Errorf("HasGBKSequence ratio = %.2f, want >= %.2f", ratio, tt.wantMinRatio)
+			}
+		})
+	}
+}
+
+func TestDetect_GBK_vs_Windows1252_Conflict(t *testing.T) {
+	// Test case where GBK might be misidentified as Windows-1252
+	// Create content with enough GBK sequences to trigger override
+	data := []byte{}
+	// Add common Chinese characters (in 0xB0-0xD7 range) that look like Windows-1252 bytes
+	gbkChars := [][]byte{
+		{0xB5, 0xC4}, // 的 - first byte 0xB5 is in Windows-1252 range
+		{0xCA, 0xC7}, // 是
+		{0xD4, 0xDA}, // 在
+		{0xB0, 0xA1}, // 啊 - common character
+		{0xB1, 0xA1}, // 阿 - common character
+	}
+	// Repeat to have enough sequences (>5 with >20% common ratio)
+	for i := 0; i < 20; i++ {
+		for _, char := range gbkChars {
+			data = append(data, char...)
+		}
+	}
+
+	result := Detect(data)
+	// Should detect GBK due to our override logic
+	if result.Charset != "gbk" {
+		t.Errorf("Charset = %q, want gbk (GBK override should kick in)", result.Charset)
+	}
+}
+
+func TestDetect_GB2312_MappedTo_GBK(t *testing.T) {
+	// Test that chardet's GB2312 detection is mapped to GBK
+	// GB2312 content (subset of GBK) - need enough content for chardet to detect it
+	// Use more characters to ensure chardet detects GB2312/GBK
+	data := []byte{}
+	gbkChars := [][]byte{
+		{0xB0, 0xA1}, // 啊
+		{0xB0, 0xA2}, // 阿
+		{0xB0, 0xA3}, // 埃
+		{0xB0, 0xA4}, // 爱
+		{0xB0, 0xA5}, // 安
+		{0xB1, 0xA1}, // 阿 (alternate)
+		{0xB1, 0xA2}, // 啊 (alternate)
+	}
+	// Repeat to have enough content for detection
+	for i := 0; i < 20; i++ {
+		for _, char := range gbkChars {
+			data = append(data, char...)
+		}
+	}
+
+	result := Detect(data)
+	// Should be mapped to GBK (either chardet detects GB2312 or our override kicks in)
+	if result.Charset != "gbk" {
+		t.Errorf("Charset = %q, want gbk (GB2312 should be mapped to GBK)", result.Charset)
+	}
+}
+

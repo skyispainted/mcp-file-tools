@@ -18,11 +18,61 @@ const (
 	MinConfidenceThreshold  = 50         // Minimum confidence to trust detection
 )
 
+// GBK detection constants for handling encoding conflicts.
+// GBK characters: first byte 0x81-0xFE, second byte 0x40-0xFE (excluding 0x7F)
+const (
+	GBKFirstByteMin  = 0x81
+	GBKFirstByteMax  = 0xFE
+	GBKSecondByteMin = 0x40
+	GBKSecondByteMax = 0xFE
+	GBKSecondByteSkip = 0x7F // Second byte cannot be 0x7F
+)
+
 // DetectionResult holds encoding detection result.
 type DetectionResult struct {
 	Charset    string
 	Confidence int
 	HasBOM     bool
+}
+
+// HasGBKSequence checks if data contains valid GBK multi-byte sequences.
+// Returns the count of GBK sequences found and whether they are common Chinese characters.
+// This helps distinguish GBK from Latin-1/Windows-1252 when chardet misidentifies.
+// Uses non-overlapping detection to accurately count GBK characters.
+func HasGBKSequence(data []byte) (seqCount int, commonRatio float64) {
+	if len(data) < 2 {
+		return 0, 0
+	}
+
+	// Common GBK first bytes for frequently used Chinese characters (0xB0-0xD7 range)
+	commonFirstBytes := 0
+
+	// Non-overlapping detection: after finding a GBK pair, skip 2 bytes
+	for i := 0; i < len(data)-1; {
+		first := data[i]
+		second := data[i+1]
+
+		// Check if this is a valid GBK sequence
+		if first >= GBKFirstByteMin && first <= GBKFirstByteMax &&
+			second >= GBKSecondByteMin && second <= GBKSecondByteMax && second != GBKSecondByteSkip {
+			seqCount++
+			// Count sequences in common Chinese character range (0xB0-0xD7)
+			if first >= 0xB0 && first <= 0xD7 {
+				commonFirstBytes++
+			}
+			// Skip both bytes (non-overlapping)
+			i += 2
+		} else {
+			// Not a GBK pair, move to next byte
+			i++
+		}
+	}
+
+	if seqCount > 0 {
+		commonRatio = float64(commonFirstBytes) / float64(seqCount)
+	}
+
+	return seqCount, commonRatio
 }
 
 // DetectBOM checks for Unicode BOMs and returns a result if found.
@@ -115,8 +165,36 @@ func Detect(data []byte) DetectionResult {
 		return DetectionResult{}
 	}
 
+	charset := strings.ToLower(detected.Encoding)
+
+	// Map chardet's "gb2312" to "gbk" (GBK is the superset and more practical)
+	// chardet detects GB2312 but most Chinese files are actually GBK encoded
+	if charset == "gb2312" || charset == "hz-gb-2312" {
+		charset = "gbk"
+	}
+
+	// Handle GBK vs Latin-1/Windows-1252 conflict
+	// When chardet misidentifies GBK as Latin-1/Windows-1252, check for GBK sequences
+	if charset == "iso-8859-1" || charset == "windows-1252" || charset == "latin-1" || charset == "latin1" || charset == "cp1252" {
+		gbkSeqCount, commonRatio := HasGBKSequence(data)
+		// If there are significant GBK sequences and they include common Chinese characters,
+		// override to GBK with adjusted confidence
+		// Threshold: at least 5 GBK sequences with >20% in common character range
+		if gbkSeqCount >= 5 && commonRatio > 0.2 {
+			// Use original confidence but cap at 85 to indicate uncertainty
+			confidence := int(detected.Confidence * 100)
+			if confidence > 85 {
+				confidence = 85
+			}
+			return DetectionResult{
+				Charset:    "gbk",
+				Confidence: confidence,
+			}
+		}
+	}
+
 	return DetectionResult{
-		Charset:    strings.ToLower(detected.Encoding),
+		Charset:    charset,
 		Confidence: int(detected.Confidence * 100),
 	}
 }

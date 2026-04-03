@@ -21,6 +21,11 @@ func TestGet(t *testing.T) {
 		{"utf-16-be", true, false},
 		{"utf16le", true, false},
 		{"utf16be", true, false},
+		{"gbk", true, false},
+		{"GBK", true, false},
+		{"cp936", true, false},
+		{"gb2312", true, false},
+		{"gb18030", true, false},
 		{"invalid", false, false},
 	}
 
@@ -75,8 +80,8 @@ func TestListEncodings(t *testing.T) {
 		}
 	}
 
-	// Verify we have the expected number of encodings (22)
-	if len(items) != 22 {
-		t.Errorf("ListEncodings() returned %d items, want 22", len(items))
+	// Verify we have the expected number of encodings (24: 22 original + GBK + GB18030)
+	if len(items) != 24 {
+		t.Errorf("ListEncodings() returned %d items, want 24", len(items))
 	}
 }
