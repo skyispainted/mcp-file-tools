@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestHandleEditFile_SimpleReplacement(t *testing.T) {
@@ -363,5 +365,85 @@ func TestEditFile_CP1251Encoding(t *testing.T) {
 
 	if string(modifiedData) != string(expectedCP1251) {
 		t.Errorf("file content mismatch.\ngot bytes: %v\nwant bytes: %v", modifiedData, expectedCP1251)
+	}
+}
+
+func TestHandleEditFile_NoMatchWithHint(t *testing.T) {
+	tempDir := t.TempDir()
+	h := NewHandler([]string{tempDir})
+
+	content := "line1\nline2\nline3\n// KNewSystemCronJob Lua bindings\nint FuncA() {}\nint FuncB() {}"
+	testFile := filepath.Join(tempDir, "test.cpp")
+	os.WriteFile(testFile, []byte(content), 0644)
+
+	// oldText has 2 lines that match, but "wrappers" vs "bindings" breaks the first line
+	input := EditFileInput{
+		Path: testFile,
+		Edits: []EditOperation{{
+			OldText: "// KNewSystemCronJob Lua wrappers\nint FuncA() {}\nint FuncB() {}",
+			NewText: "// replacement",
+		}},
+	}
+
+	result, _, err := h.HandleEditFile(context.Background(), nil, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Errorf("expected error when oldText doesn't match")
+	}
+
+	// Extract text content from result
+	if len(result.Content) == 0 {
+		t.Fatal("expected error content")
+	}
+	tc := result.Content[0].(*mcp.TextContent)
+	if !strings.Contains(tc.Text, "HINT:") {
+		t.Errorf("expected HINT in error message, got:\n%s", tc.Text)
+	}
+	if !strings.Contains(tc.Text, "Lua bindings") {
+		t.Errorf("HINT should show actual file content ('Lua bindings'), got:\n%s", tc.Text)
+	}
+}
+
+func TestFindClosestMatch(t *testing.T) {
+	content := "aaa\nbbb\nccc\nddd\neee"
+
+	tests := []struct {
+		name        string
+		oldText     string
+		wantLine    int
+		wantCount   int
+	}{
+		{
+			name:      "full match",
+			oldText:   "bbb\nccc",
+			wantLine:  1,
+			wantCount: 2,
+		},
+		{
+			name:      "partial match — one line wrong",
+			oldText:   "bbb\nWRONG\nddd",
+			wantLine:  1,
+			wantCount: 1, // "bbb" matches at line 1, "WRONG" breaks, "ddd" matches later
+		},
+		{
+			name:      "no match at all",
+			oldText:   "xxx\nyyy",
+			wantLine:  -1,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotLine, gotCount := findClosestMatch(content, tt.oldText)
+			if gotCount != tt.wantCount {
+				t.Errorf("count = %d, want %d", gotCount, tt.wantCount)
+			}
+			if gotCount > 0 && gotLine != tt.wantLine {
+				t.Errorf("line = %d, want %d", gotLine, tt.wantLine)
+			}
+		})
 	}
 }

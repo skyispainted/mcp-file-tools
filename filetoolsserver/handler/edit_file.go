@@ -100,6 +100,7 @@ func (h *Handler) HandleEditFile(ctx context.Context, req *mcp.CallToolRequest, 
 }
 
 // applyEdits applies edits sequentially, trying exact match then whitespace-flexible match.
+// On failure, returns context-aware hints so the AI agent can construct a correct oldText.
 func applyEdits(content string, edits []EditOperation) (string, error) {
 	modifiedContent := content
 
@@ -124,10 +125,52 @@ func applyEdits(content string, edits []EditOperation) (string, error) {
 			continue
 		}
 
+		// Build context-aware hint so the AI agent can construct a correct oldText.
+		// Find the line where the most consecutive lines from oldText match the content.
+		bestLine, bestCount := findClosestMatch(modifiedContent, normalizedOld)
+		if bestLine >= 0 && bestCount > 0 {
+			lines := strings.Split(modifiedContent, "\n")
+			start := max(0, bestLine-1)
+			end := min(len(lines), bestLine+bestCount+2)
+			snippet := strings.Join(lines[start:end], "\n")
+			return "", fmt.Errorf("%w:\n%s\n\nHINT: The closest match in the file is at line %d (%d consecutive matching lines).\n"+
+				"Actual file content around that location:\n%s\n\n"+
+				"Use the above snippet as oldText and retry.",
+				ErrEditNoMatch, edit.OldText, bestLine+1, bestCount, snippet)
+		}
+
 		return "", fmt.Errorf("%w:\n%s", ErrEditNoMatch, edit.OldText)
 	}
 
 	return modifiedContent, nil
+}
+
+// findClosestMatch finds the longest consecutive matching block between oldText and content
+// (after trimming whitespace). Returns the starting line in content and the match length.
+func findClosestMatch(content, oldText string) (bestContentLine, bestCount int) {
+	contentLines := strings.Split(content, "\n")
+	oldLines := strings.Split(oldText, "\n")
+
+	bestContentLine, bestCount = -1, 0
+
+	for i := 0; i < len(contentLines); i++ {
+		for j := 0; j < len(oldLines); j++ {
+			// Count consecutive matches starting at contentLines[i] and oldLines[j]
+			count := 0
+			for k := 0; i+k < len(contentLines) && j+k < len(oldLines); k++ {
+				if strings.TrimSpace(contentLines[i+k]) != strings.TrimSpace(oldLines[j+k]) {
+					break
+				}
+				count++
+			}
+			if count > bestCount {
+				bestContentLine = i
+				bestCount = count
+			}
+		}
+	}
+
+	return bestContentLine, bestCount
 }
 
 // tryFlexibleMatch matches oldText ignoring whitespace differences, preserving file indentation.
