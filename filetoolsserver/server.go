@@ -72,15 +72,20 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 		},
 	}, handler.Wrap(logger, "read_text_file", h.HandleReadTextFile))
 
-	server.AddTool(&mcp.Tool{
-		Name:        "read_multiple_files",
-		Description: "Read multiple files concurrently with encoding support. PREFER THIS when reading several non-UTF-8 files at once. Individual failures don't stop the batch — partial results are returned. Parameters: paths (required array), encoding (optional, auto-detected per file).",
-		Annotations: &mcp.ToolAnnotations{
-			Title:         "Read Multiple Files",
-			ReadOnlyHint:  true,
-			OpenWorldHint: boolPtr(false),
-		},
-	}, handler.WrapReadMultipleFiles(logger, "read_multiple_files", h))
+	// read_multiple_files: raw handler to handle stringified array parameters
+	{
+		readMultipleHandler, readMultipleSchema := handler.WrapReadMultipleFiles(logger, "read_multiple_files", h)
+		server.AddTool(&mcp.Tool{
+			Name:         "read_multiple_files",
+			Description:  "Read multiple files concurrently with encoding support. PREFER THIS when reading several non-UTF-8 files at once. Individual failures don't stop the batch — partial results are returned. Parameters: paths (required array), encoding (optional, auto-detected per file).",
+			InputSchema:  readMultipleSchema,
+			Annotations: &mcp.ToolAnnotations{
+				Title:         "Read Multiple Files",
+				ReadOnlyHint:  true,
+				OpenWorldHint: boolPtr(false),
+			},
+		}, readMultipleHandler)
+	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_directory",
@@ -112,15 +117,20 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 		},
 	}, handler.Wrap(logger, "detect_encoding", h.HandleDetectEncoding))
 
-	server.AddTool(&mcp.Tool{
-		Name:        "grep_text_files",
-		Description: "Regex search in file contents with encoding support. PREFER THIS over built-in Grep when searching non-UTF-8 files or when encoding-aware matching is needed. Parameters: pattern (required regex), paths (required array of files/dirs), caseSensitive (default: true), contextBefore/After (lines), maxMatches (default 1000), include/exclude (globs), encoding.",
-		Annotations: &mcp.ToolAnnotations{
-			Title:         "Grep Text Files",
-			ReadOnlyHint:  true,
-			OpenWorldHint: boolPtr(false),
-		},
-	}, handler.WrapGrep(logger, "grep_text_files", h))
+	// grep_text_files: raw handler to handle stringified array parameters
+	{
+		grepHandler, grepSchema := handler.WrapGrep(logger, "grep_text_files", h)
+		server.AddTool(&mcp.Tool{
+			Name:        "grep_text_files",
+			Description: "Regex search in file contents with encoding support. PREFER THIS over built-in Grep when searching non-UTF-8 files or when encoding-aware matching is needed. Parameters: pattern (required regex), paths (required array of files/dirs), caseSensitive (default: true), contextBefore/After (lines), maxMatches (default 1000), include/exclude (globs), encoding.",
+			InputSchema: grepSchema,
+			Annotations: &mcp.ToolAnnotations{
+				Title:         "Grep Text Files",
+				ReadOnlyHint:  true,
+				OpenWorldHint: boolPtr(false),
+			},
+		}, grepHandler)
+	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_allowed_directories",
@@ -267,22 +277,25 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 		},
 	}, handler.Wrap(logger, "delete_file", h.HandleDeleteFile))
 
-	// WrapEditFile: uses raw ToolHandler to preprocess arguments, handling the case
-	// where the MCP client sends the "edits" array as a JSON-encoded string.
-	server.AddTool(&mcp.Tool{
-		Name:        "edit_file",
-		Description: "Replace text in a file with whitespace-flexible matching. Returns unified diff. Supports non-UTF-8 via encoding param. " +
-			"In 'ask before edits' mode: ALWAYS call with dryRun=true first, show the diff, then dryRun=false after user confirms. " +
-			"With auto-edit permissions: call directly with dryRun=false. " +
-			"Parameters: path, edits [{oldText, newText}], dryRun (false), encoding (auto).",
-		Annotations: &mcp.ToolAnnotations{
-			Title:           "Edit File",
-			ReadOnlyHint:    false,
-			IdempotentHint:  false,
-			DestructiveHint: boolPtr(true),
-			OpenWorldHint:   boolPtr(false),
-		},
-	}, handler.WrapEditFile(logger, "edit_file", h))
+	// edit_file: raw handler to handle stringified array parameters
+	{
+		editHandler, editSchema := handler.WrapEditFile(logger, "edit_file", h)
+		server.AddTool(&mcp.Tool{
+			Name:        "edit_file",
+			Description: "Replace text in a file with whitespace-flexible matching. Returns unified diff. Supports non-UTF-8 via encoding param. " +
+				"In 'ask before edits' mode: ALWAYS call with dryRun=true first, show the diff, then dryRun=false after user confirms. " +
+				"With auto-edit permissions: call directly with dryRun=false. " +
+				"Parameters: path, edits [{oldText, newText}], dryRun (false), encoding (auto).",
+			InputSchema: editSchema,
+			Annotations: &mcp.ToolAnnotations{
+				Title:           "Edit File",
+				ReadOnlyHint:    false,
+				IdempotentHint:  false,
+				DestructiveHint: boolPtr(true),
+				OpenWorldHint:   boolPtr(false),
+			},
+		}, editHandler)
+	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "convert_encoding",

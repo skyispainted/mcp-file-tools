@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"runtime/debug"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -78,11 +80,13 @@ func WrapContentOnly[In, Out any](logger *slog.Logger, toolName string, handler 
 // WrapEditFile registers edit_file with a raw ToolHandler that preprocesses
 // arguments to handle the case where the MCP client sends the "edits" array
 // as a JSON-encoded string instead of a proper JSON array.
-func WrapEditFile(logger *slog.Logger, toolName string, h *Handler) mcp.ToolHandler {
+// Returns the handler and the auto-generated input schema.
+func WrapEditFile(logger *slog.Logger, toolName string, h *Handler) (mcp.ToolHandler, *jsonschema.Schema) {
+	inputSchema, _ := jsonschema.ForType(reflect.TypeFor[EditFileInput](), &jsonschema.ForOptions{})
 	raw := WithRecoveryRaw(logger, toolName, h.HandleEditFileRaw)
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return raw(ctx, req)
-	}
+	}, inputSchema
 }
 
 // preprocessEditArgs handles the case where "edits" is sent as a JSON string.
@@ -151,11 +155,12 @@ func (h *Handler) HandleEditFileRaw(ctx context.Context, req *mcp.CallToolReques
 // WrapGrep registers grep_text_files with a raw ToolHandler that preprocesses
 // arguments to handle the case where the MCP client sends the "paths" array
 // as a JSON-encoded string instead of a proper JSON array.
-func WrapGrep(logger *slog.Logger, toolName string, h *Handler) mcp.ToolHandler {
+func WrapGrep(logger *slog.Logger, toolName string, h *Handler) (mcp.ToolHandler, *jsonschema.Schema) {
+	inputSchema, _ := jsonschema.ForType(reflect.TypeFor[GrepInput](), &jsonschema.ForOptions{})
 	raw := WithRecoveryRaw(logger, toolName, h.HandleGrepRaw)
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return raw(ctx, req)
-	}
+	}, inputSchema
 }
 
 // preprocessGrepArgs handles the case where array fields are sent as JSON strings.
@@ -231,11 +236,12 @@ func (h *Handler) HandleGrepRaw(ctx context.Context, req *mcp.CallToolRequest) (
 
 // WrapReadMultipleFiles registers read_multiple_files with a raw ToolHandler that
 // preprocesses arguments to handle stringified array parameters.
-func WrapReadMultipleFiles(logger *slog.Logger, toolName string, h *Handler) mcp.ToolHandler {
+func WrapReadMultipleFiles(logger *slog.Logger, toolName string, h *Handler) (mcp.ToolHandler, *jsonschema.Schema) {
+	inputSchema, _ := jsonschema.ForType(reflect.TypeFor[ReadMultipleFilesInput](), &jsonschema.ForOptions{})
 	raw := WithRecoveryRaw(logger, toolName, h.HandleReadMultipleFilesRaw)
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return raw(ctx, req)
-	}
+	}, inputSchema
 }
 
 // preprocessReadMultipleArgs handles stringified array parameters.
