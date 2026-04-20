@@ -148,6 +148,140 @@ func (h *Handler) HandleEditFileRaw(ctx context.Context, req *mcp.CallToolReques
 	return result, nil
 }
 
+// WrapGrep registers grep_text_files with a raw ToolHandler that preprocesses
+// arguments to handle the case where the MCP client sends the "paths" array
+// as a JSON-encoded string instead of a proper JSON array.
+func WrapGrep(logger *slog.Logger, toolName string, h *Handler) mcp.ToolHandler {
+	raw := WithRecoveryRaw(logger, toolName, h.HandleGrepRaw)
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return raw(ctx, req)
+	}
+}
+
+// preprocessGrepArgs handles the case where array fields are sent as JSON strings.
+func preprocessGrepArgs(raw json.RawMessage) (*GrepInput, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("parsing arguments: %w", err)
+	}
+
+	var input GrepInput
+
+	// Extract simple fields.
+	if p, ok := m["pattern"]; ok {
+		if err := json.Unmarshal(p, &input.Pattern); err != nil {
+			return nil, fmt.Errorf("parsing pattern: %w", err)
+		}
+	}
+	if p, ok := m["include"]; ok {
+		json.Unmarshal(p, &input.Include)
+	}
+	if p, ok := m["exclude"]; ok {
+		json.Unmarshal(p, &input.Exclude)
+	}
+	if p, ok := m["encoding"]; ok {
+		json.Unmarshal(p, &input.Encoding)
+	}
+	if p, ok := m["contextBefore"]; ok {
+		json.Unmarshal(p, &input.ContextBefore)
+	}
+	if p, ok := m["contextAfter"]; ok {
+		json.Unmarshal(p, &input.ContextAfter)
+	}
+	if p, ok := m["maxMatches"]; ok {
+		json.Unmarshal(p, &input.MaxMatches)
+	}
+	if p, ok := m["caseSensitive"]; ok {
+		var b bool
+		if err := json.Unmarshal(p, &b); err == nil {
+			input.CaseSensitive = &b
+		}
+	}
+
+	// Handle paths: could be a proper array or a JSON-encoded string.
+	if pathsRaw, ok := m["paths"]; ok && len(pathsRaw) > 0 {
+		if err := json.Unmarshal(pathsRaw, &input.Paths); err != nil {
+			var s string
+			if err2 := json.Unmarshal(pathsRaw, &s); err2 == nil {
+				if err3 := json.Unmarshal([]byte(s), &input.Paths); err3 != nil {
+					return nil, fmt.Errorf("parsing paths from string: %w", err3)
+				}
+			} else {
+				return nil, fmt.Errorf("parsing paths: expected array or JSON string, got %s", string(pathsRaw))
+			}
+		}
+	}
+
+	return &input, nil
+}
+
+// HandleGrepRaw is the raw handler for grep_text_files that preprocesses arguments.
+func (h *Handler) HandleGrepRaw(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	input, err := preprocessGrepArgs(req.Params.Arguments)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+
+	result, _, err := h.HandleGrep(ctx, req, *input)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// WrapReadMultipleFiles registers read_multiple_files with a raw ToolHandler that
+// preprocesses arguments to handle stringified array parameters.
+func WrapReadMultipleFiles(logger *slog.Logger, toolName string, h *Handler) mcp.ToolHandler {
+	raw := WithRecoveryRaw(logger, toolName, h.HandleReadMultipleFilesRaw)
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return raw(ctx, req)
+	}
+}
+
+// preprocessReadMultipleArgs handles stringified array parameters.
+func preprocessReadMultipleArgs(raw json.RawMessage) (*ReadMultipleFilesInput, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("parsing arguments: %w", err)
+	}
+
+	var input ReadMultipleFilesInput
+
+	if p, ok := m["encoding"]; ok {
+		json.Unmarshal(p, &input.Encoding)
+	}
+
+	// Handle paths: could be a proper array or a JSON-encoded string.
+	if pathsRaw, ok := m["paths"]; ok && len(pathsRaw) > 0 {
+		if err := json.Unmarshal(pathsRaw, &input.Paths); err != nil {
+			var s string
+			if err2 := json.Unmarshal(pathsRaw, &s); err2 == nil {
+				if err3 := json.Unmarshal([]byte(s), &input.Paths); err3 != nil {
+					return nil, fmt.Errorf("parsing paths from string: %w", err3)
+				}
+			} else {
+				return nil, fmt.Errorf("parsing paths: expected array or JSON string, got %s", string(pathsRaw))
+			}
+		}
+	}
+
+	return &input, nil
+}
+
+// HandleReadMultipleFilesRaw is the raw handler for read_multiple_files that preprocesses arguments.
+func (h *Handler) HandleReadMultipleFilesRaw(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	input, err := preprocessReadMultipleArgs(req.Params.Arguments)
+	if err != nil {
+		return errorResult(fmt.Sprintf("invalid arguments: %v", err)), nil
+	}
+
+	result, _, err := h.HandleReadMultipleFiles(ctx, req, *input)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // WithRecoveryRaw wraps a raw ToolHandler with panic recovery and optional logging.
 func WithRecoveryRaw(logger *slog.Logger, toolName string, handler mcp.ToolHandler) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {

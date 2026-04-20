@@ -72,7 +72,7 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 		},
 	}, handler.Wrap(logger, "read_text_file", h.HandleReadTextFile))
 
-	mcp.AddTool(server, &mcp.Tool{
+	server.AddTool(&mcp.Tool{
 		Name:        "read_multiple_files",
 		Description: "Read multiple files concurrently with encoding support. PREFER THIS when reading several non-UTF-8 files at once. Individual failures don't stop the batch — partial results are returned. Parameters: paths (required array), encoding (optional, auto-detected per file).",
 		Annotations: &mcp.ToolAnnotations{
@@ -80,7 +80,7 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 			ReadOnlyHint:  true,
 			OpenWorldHint: boolPtr(false),
 		},
-	}, handler.Wrap(logger, "read_multiple_files", h.HandleReadMultipleFiles))
+	}, handler.WrapReadMultipleFiles(logger, "read_multiple_files", h))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_directory",
@@ -112,7 +112,7 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 		},
 	}, handler.Wrap(logger, "detect_encoding", h.HandleDetectEncoding))
 
-	mcp.AddTool(server, &mcp.Tool{
+	server.AddTool(&mcp.Tool{
 		Name:        "grep_text_files",
 		Description: "Regex search in file contents with encoding support. PREFER THIS over built-in Grep when searching non-UTF-8 files or when encoding-aware matching is needed. Parameters: pattern (required regex), paths (required array of files/dirs), caseSensitive (default: true), contextBefore/After (lines), maxMatches (default 1000), include/exclude (globs), encoding.",
 		Annotations: &mcp.ToolAnnotations{
@@ -120,7 +120,7 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 			ReadOnlyHint:  true,
 			OpenWorldHint: boolPtr(false),
 		},
-	}, handler.Wrap(logger, "grep_text_files", h.HandleGrep))
+	}, handler.WrapGrep(logger, "grep_text_files", h))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_allowed_directories",
