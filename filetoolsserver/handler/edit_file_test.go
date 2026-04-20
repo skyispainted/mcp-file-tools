@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestHandleEditFile_SimpleReplacement(t *testing.T) {
@@ -377,6 +375,7 @@ func TestHandleEditFile_NoMatchWithHint(t *testing.T) {
 	os.WriteFile(testFile, []byte(content), 0644)
 
 	// oldText has 2 lines that match, but "wrappers" vs "bindings" breaks the first line
+	// Partial block match should still succeed by replacing the matched region.
 	input := EditFileInput{
 		Path: testFile,
 		Edits: []EditOperation{{
@@ -385,24 +384,52 @@ func TestHandleEditFile_NoMatchWithHint(t *testing.T) {
 		}},
 	}
 
+	result, output, err := h.HandleEditFile(context.Background(), nil, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Errorf("expected success via partial block match, got error")
+	}
+
+	// Verify the replacement was made
+	fileContent, _ := os.ReadFile(testFile)
+	expected := "line1\nline2\nline3\n// replacement"
+	if string(fileContent) != expected {
+		t.Errorf("file content mismatch.\ngot:  %q\nwant: %q", string(fileContent), expected)
+	}
+	_ = output
+}
+
+func TestHandleEditFile_PartialBlockMatch(t *testing.T) {
+	tempDir := t.TempDir()
+	h := NewHandler([]string{tempDir})
+
+	// Simulates a file with BOM on the first line of a block
+	content := "func init() {\n\xef\xbb\xbf    -- some comment with BOM\n    doSomething()\n    doOther()\n}"
+	testFile := filepath.Join(tempDir, "test.lua")
+	os.WriteFile(testFile, []byte(content), 0644)
+
+	// oldText doesn't have BOM, but partial block match should find the 2 matching lines
+	input := EditFileInput{
+		Path: testFile,
+		Edits: []EditOperation{{
+			OldText: "    -- some comment without BOM\n    doSomething()\n    doOther()",
+			NewText: "    -- new comment\n    doNew()",
+		}},
+	}
+
 	result, _, err := h.HandleEditFile(context.Background(), nil, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.IsError {
-		t.Errorf("expected error when oldText doesn't match")
+	if result.IsError {
+		t.Errorf("expected success via partial block match, got error")
 	}
 
-	// Extract text content from result
-	if len(result.Content) == 0 {
-		t.Fatal("expected error content")
-	}
-	tc := result.Content[0].(*mcp.TextContent)
-	if !strings.Contains(tc.Text, "HINT:") {
-		t.Errorf("expected HINT in error message, got:\n%s", tc.Text)
-	}
-	if !strings.Contains(tc.Text, "Lua bindings") {
-		t.Errorf("HINT should show actual file content ('Lua bindings'), got:\n%s", tc.Text)
+	fileContent, _ := os.ReadFile(testFile)
+	if !strings.Contains(string(fileContent), "doNew()") {
+		t.Errorf("expected file to contain 'doNew()', got %q", string(fileContent))
 	}
 }
 

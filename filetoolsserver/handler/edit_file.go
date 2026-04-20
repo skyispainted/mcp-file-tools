@@ -99,8 +99,8 @@ func (h *Handler) HandleEditFile(ctx context.Context, req *mcp.CallToolRequest, 
 	}, output, nil
 }
 
-// applyEdits applies edits sequentially, trying exact match then whitespace-flexible match.
-// On failure, returns context-aware hints so the AI agent can construct a correct oldText.
+// applyEdits applies edits sequentially, trying exact match then whitespace-flexible match,
+// then partial block match. On failure, returns context-aware hints.
 func applyEdits(content string, edits []EditOperation) (string, error) {
 	modifiedContent := content
 
@@ -125,20 +125,45 @@ func applyEdits(content string, edits []EditOperation) (string, error) {
 			continue
 		}
 
+		// Try partial block match: find the longest consecutive matching block,
+		// then replace the corresponding region with newText.
+		bestContentLine, bestCount := findClosestMatch(modifiedContent, normalizedOld)
+		if bestContentLine >= 0 && bestCount > 0 {
+			oldLines := strings.Split(normalizedOld, "\n")
+			contentLines := strings.Split(modifiedContent, "\n")
+
+			// Find which oldText line corresponds to the match start.
+			bestOldLine := findOldLineStart(contentLines, bestContentLine, oldLines)
+
+			// Expand match region to cover all non-matching lines before and after.
+			// We replace from bestContentLine - bestOldLine to bestContentLine + bestCount.
+			startLine := max(0, bestContentLine-bestOldLine)
+			endLine := min(len(contentLines), bestContentLine+bestCount)
+
+			// Safety: only do partial replace if we're replacing a reasonable number of lines.
+			replacedCount := endLine - startLine
+			if replacedCount <= len(contentLines) && replacedCount > 0 {
+				// Replace the region.
+				result := make([]string, 0, len(contentLines)-replacedCount+1)
+				result = append(result, contentLines[:startLine]...)
+				result = append(result, strings.Split(normalizedNew, "\n")...)
+				result = append(result, contentLines[endLine:]...)
+				modifiedContent = strings.Join(result, "\n")
+				continue
+			}
+		}
+
 		// Build context-aware hint so the AI agent can construct a correct oldText.
-		// Find the line where the most consecutive lines from oldText match the content.
-		bestLine, bestCount := findClosestMatch(modifiedContent, normalizedOld)
-		if bestLine >= 0 && bestCount > 0 {
-			lines := strings.Split(modifiedContent, "\n")
-			start := max(0, bestLine-1)
-			end := min(len(lines), bestLine+bestCount+2)
+		lines := strings.Split(modifiedContent, "\n")
+		if bestContentLine >= 0 {
+			start := max(0, bestContentLine-1)
+			end := min(len(lines), bestContentLine+bestCount+2)
 			snippet := strings.Join(lines[start:end], "\n")
 			return "", fmt.Errorf("%w:\n%s\n\nHINT: The closest match in the file is at line %d (%d consecutive matching lines).\n"+
 				"Actual file content around that location:\n%s\n\n"+
 				"Use the above snippet as oldText and retry.",
-				ErrEditNoMatch, edit.OldText, bestLine+1, bestCount, snippet)
+				ErrEditNoMatch, edit.OldText, bestContentLine+1, bestCount, snippet)
 		}
-
 		return "", fmt.Errorf("%w:\n%s", ErrEditNoMatch, edit.OldText)
 	}
 
@@ -146,7 +171,7 @@ func applyEdits(content string, edits []EditOperation) (string, error) {
 }
 
 // findClosestMatch finds the longest consecutive matching block between oldText and content
-// (after trimming whitespace). Returns the starting line in content and the match length.
+// (after trimming whitespace and stripping BOM). Returns the starting line in content and the match length.
 func findClosestMatch(content, oldText string) (bestContentLine, bestCount int) {
 	contentLines := strings.Split(content, "\n")
 	oldLines := strings.Split(oldText, "\n")
@@ -158,7 +183,9 @@ func findClosestMatch(content, oldText string) (bestContentLine, bestCount int) 
 			// Count consecutive matches starting at contentLines[i] and oldLines[j]
 			count := 0
 			for k := 0; i+k < len(contentLines) && j+k < len(oldLines); k++ {
-				if strings.TrimSpace(contentLines[i+k]) != strings.TrimSpace(oldLines[j+k]) {
+				cLine := normalizeLine(contentLines[i+k])
+				oLine := normalizeLine(oldLines[j+k])
+				if cLine != oLine {
 					break
 				}
 				count++
@@ -171,6 +198,23 @@ func findClosestMatch(content, oldText string) (bestContentLine, bestCount int) 
 	}
 
 	return bestContentLine, bestCount
+}
+
+// findOldLineStart finds the oldText line index that matches contentLines[contentIdx].
+// Returns 0 if no exact match is found (meaning we assume the match starts at oldText[0]).
+func findOldLineStart(contentLines []string, contentIdx int, oldLines []string) int {
+	for j := 0; j < len(oldLines); j++ {
+		if normalizeLine(contentLines[contentIdx]) == normalizeLine(oldLines[j]) {
+			return j
+		}
+	}
+	return 0
+}
+
+// normalizeLine trims whitespace and strips BOM for comparison.
+func normalizeLine(s string) string {
+	s = strings.TrimLeft(s, "\uFEFF") // strip BOM
+	return strings.TrimSpace(s)
 }
 
 // tryFlexibleMatch matches oldText ignoring whitespace differences, preserving file indentation.
