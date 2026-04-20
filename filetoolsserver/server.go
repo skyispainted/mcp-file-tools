@@ -267,8 +267,9 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 		},
 	}, handler.Wrap(logger, "delete_file", h.HandleDeleteFile))
 
-	// WrapContentOnly: returns readable diff text instead of StructuredContent JSON.
-	mcp.AddTool(server, &mcp.Tool{
+	// WrapEditFile: uses raw ToolHandler to preprocess arguments, handling the case
+	// where the MCP client sends the "edits" array as a JSON-encoded string.
+	server.AddTool(&mcp.Tool{
 		Name:        "edit_file",
 		Description: "Replace text in a file with whitespace-flexible matching. Returns unified diff. Supports non-UTF-8 via encoding param. " +
 			"In 'ask before edits' mode: ALWAYS call with dryRun=true first, show the diff, then dryRun=false after user confirms. " +
@@ -281,7 +282,7 @@ func NewServer(allowedDirs []string, logger *slog.Logger, cfg *config.Config) *m
 			DestructiveHint: boolPtr(true),
 			OpenWorldHint:   boolPtr(false),
 		},
-	}, handler.WrapContentOnly(logger, "edit_file", h.HandleEditFile))
+	}, handler.WrapEditFile(logger, "edit_file", h))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "convert_encoding",

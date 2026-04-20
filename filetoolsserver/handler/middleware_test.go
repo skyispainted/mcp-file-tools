@@ -3,6 +3,8 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -163,5 +165,80 @@ func TestWrap_CombinesMiddleware(t *testing.T) {
 	}
 	if !strings.Contains(logOutput, "tool_call_failed") {
 		t.Error("expected tool_call_failed log")
+	}
+}
+
+func TestPreprocessEditArgs_NormalArray(t *testing.T) {
+	raw := json.RawMessage(`{"path":"/test/file.txt","edits":[{"oldText":"old","newText":"new"}]}`)
+	input, err := preprocessEditArgs(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if input.Path != "/test/file.txt" {
+		t.Errorf("expected path '/test/file.txt', got %q", input.Path)
+	}
+	if len(input.Edits) != 1 {
+		t.Fatalf("expected 1 edit, got %d", len(input.Edits))
+	}
+	if input.Edits[0].OldText != "old" || input.Edits[0].NewText != "new" {
+		t.Errorf("unexpected edit: %+v", input.Edits[0])
+	}
+}
+
+func TestPreprocessEditArgs_StringifiedArray(t *testing.T) {
+	raw := json.RawMessage(`{"path":"/test/file.txt","edits":"[{\"oldText\":\"old\",\"newText\":\"new\"}]"}`)
+	input, err := preprocessEditArgs(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if input.Path != "/test/file.txt" {
+		t.Errorf("expected path '/test/file.txt', got %q", input.Path)
+	}
+	if len(input.Edits) != 1 {
+		t.Fatalf("expected 1 edit, got %d", len(input.Edits))
+	}
+	if input.Edits[0].OldText != "old" || input.Edits[0].NewText != "new" {
+		t.Errorf("unexpected edit: %+v", input.Edits[0])
+	}
+}
+
+func TestPreprocessEditArgs_MultipleEdits(t *testing.T) {
+	edits := `[{"oldText":"#include \"A.h\"\n#include \"B.h\"","newText":"#include \"A.h\"\n#include \"C.h\"\n#include \"B.h\""},{"oldText":"func1()","newText":"func2()"}]`
+	raw := json.RawMessage(fmt.Sprintf(`{"path":"/test.cpp","edits":%s}`, edits))
+	input, err := preprocessEditArgs(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(input.Edits) != 2 {
+		t.Fatalf("expected 2 edits, got %d", len(input.Edits))
+	}
+}
+
+func TestPreprocessEditArgs_StringifiedMultipleEdits(t *testing.T) {
+	editsStr := `"[{\"oldText\":\"old1\",\"newText\":\"new1\"},{\"oldText\":\"old2\",\"newText\":\"new2\"}]"`
+	raw := json.RawMessage(fmt.Sprintf(`{"path":"/test.cpp","edits":%s}`, editsStr))
+	input, err := preprocessEditArgs(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(input.Edits) != 2 {
+		t.Fatalf("expected 2 edits, got %d", len(input.Edits))
+	}
+	if input.Edits[0].OldText != "old1" || input.Edits[1].NewText != "new2" {
+		t.Errorf("unexpected edits: %+v", input.Edits)
+	}
+}
+
+func TestPreprocessEditArgs_DryRunAndEncoding(t *testing.T) {
+	raw := json.RawMessage(`{"path":"/test.txt","edits":[],"dryRun":true,"encoding":"gbk"}`)
+	input, err := preprocessEditArgs(raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !input.DryRun {
+		t.Error("expected dryRun to be true")
+	}
+	if input.Encoding != "gbk" {
+		t.Errorf("expected encoding 'gbk', got %q", input.Encoding)
 	}
 }
